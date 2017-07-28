@@ -4,7 +4,6 @@ import org.apache.nifi.processor.AbstractProcessor;
 
 import java.nio.charset.StandardCharsets;
 import java.security.Security;
-//import java.text.Normalizer;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import org.apache.commons.lang3.StringUtils;
@@ -21,7 +20,6 @@ import org.apache.nifi.components.ValidationContext;
 import org.apache.nifi.components.ValidationResult;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.processors.standard.EncryptContent.Encryptor;
-//import org.apache.nifi.flowfile.attributes.CoreAttributes;
 import org.apache.nifi.logging.ComponentLog;
 import org.apache.nifi.processor.ProcessContext;
 import org.apache.nifi.processor.ProcessSession;
@@ -34,23 +32,18 @@ import org.apache.nifi.security.util.EncryptionMethod;
 import org.apache.nifi.security.util.KeyDerivationFunction;
 import org.apache.nifi.security.util.crypto.CipherUtility;
 import org.apache.nifi.security.util.crypto.PasswordBasedEncryptor;
-import org.apache.nifi.security.util.crypto.OpenPGPPasswordBasedEncryptor;
 import org.apache.nifi.util.StopWatch;
+import org.apache.nifi.dbcp.DBCPService;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
-
-//import java.io.InputStream;
-//import java.io.OutputStream;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-//import java.sql.Statement;
 import java.sql.PreparedStatement;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import org.apache.nifi.dbcp.DBCPService;
 
 @EventDriven
 @SideEffectFree
@@ -157,9 +150,6 @@ public class IsilonEncryption extends AbstractProcessor {
                 "if unsafe combinations of encryption algorithms and passwords are provided on a JVM with limited strength crypto. To fix this, see the Admin Guide.");
     }
 
-    // SQL
-    //public static final String RESULT_ROW_COUNT = "executesql.row.count";
-
     // Relationships
 
     private static final PropertyDescriptor DBCP_SERVICE = new PropertyDescriptor.Builder()
@@ -227,7 +217,6 @@ public class IsilonEncryption extends AbstractProcessor {
         properties.add(DBCP_SERVICE);
         properties.add(SQL_SELECT_QUERY);
         properties.add(SQL_INSERT_QUERY);
-//        properties.add(QUERY_TIMEOUT);
         properties.add(STORAGE_ID);
         properties.add(FILE_PATH);
         properties.add(FILE_NAME);
@@ -335,7 +324,7 @@ public class IsilonEncryption extends AbstractProcessor {
         final String fileKey;
         try (
                 final Connection con = dbcpService.getConnection();
-                final PreparedStatement st = con.prepareStatement(selectQuery);
+                final PreparedStatement st = con.prepareStatement(selectQuery)
             )
         {
             st.setString(1, masterKey);
@@ -389,13 +378,10 @@ public class IsilonEncryption extends AbstractProcessor {
             return;
         }
 
-//        final char[] passphrase = Normalizer.normalize(password, Normalizer.Form.NFC).toCharArray();
         final String method = context.getProperty(ENCRYPTION_ALGORITHM).getValue();
         final EncryptionMethod encryptionMethod = EncryptionMethod.valueOf(method);
         final KeyDerivationFunction kdf = KeyDerivationFunction.valueOf(context.getProperty(KEY_DERIVATION_FUNCTION).getValue());
         final boolean encrypt = context.getProperty(MODE).getValue().equalsIgnoreCase(ENCRYPT_MODE);
-
-        String fileKey = context.getProperty(STORAGE_ID).toString();
 
         Encryptor encryptor;
         StreamCallback callback;
@@ -411,11 +397,7 @@ public class IsilonEncryption extends AbstractProcessor {
 
         // SQL
         final DBCPService dbcpService = context.getProperty(DBCP_SERVICE).asControllerService(DBCPService.class);
-        final String selectQuery =
-                "select aes_decrypt(encryptionkey,unhex(sha2(?,512))) from Isilon.EncryptionKeys where storageID = ?";
-        final String insertQuery =
-                 "insert into Isilon.EncryptionKeys (storageID, path, filename, encryptionkey) "
-                +"values ( ?, ?, ?, aes_encrypt(?, unhex(sha2(?,512) )));";
+
         // Shared
         final ComponentLog logger = getLogger();
 
@@ -423,32 +405,17 @@ public class IsilonEncryption extends AbstractProcessor {
             if (encrypt) {
                 try {
                     final String testKey = setFileKey(storageID, fileKeyPassword, filePath, fileName, dbcpService);
-                    encryptor = (Encryptor) new PasswordBasedEncryptor(encryptionMethod, testKey.toCharArray(), kdf);
+                    encryptor = new PasswordBasedEncryptor(encryptionMethod, testKey.toCharArray(), kdf);
                     callback = encryptor.getEncryptionCallback();
                 }
                 catch (final SQLException e) {
-                    logger.error("failed to update DB - ",e);
-                    session.transfer(flowFile, REL_FAILURE);
                     throw new ProcessException(e);
                 }
             } else { // decrypt
-                final String testKey = getFileKey(storageID, fileKeyPassword, dbcpService);
-                try (
-                    final Connection con = dbcpService.getConnection();
-                    final PreparedStatement st = con.prepareStatement(selectQuery)
-                ) {
-                    st.setString(1, fileKeyPassword);
-                    st.setString(2, storageID);
-                    if (st.execute()) {
-                        final ResultSet rs = st.getResultSet();
-                        rs.next();
-                        fileKey = rs.getString(1);
-
-                        encryptor = new PasswordBasedEncryptor(encryptionMethod, fileKey.toCharArray(), kdf);
-                        callback = encryptor.getDecryptionCallback();
-                    } else {
-                        throw new ProcessException("Failed to retrieve file key");
-                    }
+                try {
+                    final String testKey = getFileKey(storageID, fileKeyPassword, dbcpService);
+                    encryptor = new PasswordBasedEncryptor(encryptionMethod, testKey.toCharArray(), kdf);
+                    callback = encryptor.getDecryptionCallback();
                 } catch (final SQLException e) {
                     throw new ProcessException(e);
                 }
@@ -467,7 +434,6 @@ public class IsilonEncryption extends AbstractProcessor {
         try {
             final StopWatch stopWatch = new StopWatch(true);
             flowFile = session.write(flowFile, callback);
-            // TODO: DoKeyRetrieval();
             logger.info("successfully {}crypted {}", new Object[]{encrypt ? "en" : "de", flowFile});
             session.getProvenanceReporter().modifyContent(flowFile, stopWatch.getElapsed(TimeUnit.MILLISECONDS));
             session.transfer(flowFile, REL_SUCCESS);
