@@ -320,7 +320,7 @@ public class IsilonEncryption extends AbstractProcessor {
 
     private String getFileKey(final String storageID, final String masterKey, final DBCPService dbcpService) {
        final String selectQuery =
-           "select aes_decrypt(encryptionkey,unhex(sha2(?,512))) from Isilon.EncryptionKeys where storageID = ?";
+           "select aes_decrypt(encryptionkey,unhex(sha2(?,512))) from Isilon.EncryptionKeys where storageID > 0";
         final String fileKey;
         try (
                 final Connection con = dbcpService.getConnection();
